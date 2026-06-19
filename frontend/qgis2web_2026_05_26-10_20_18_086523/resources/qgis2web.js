@@ -1,0 +1,1066 @@
+
+var map = new ol.Map({
+    target: 'map',
+    renderer: 'canvas',
+    layers: layersList,
+    view: new ol.View({
+         center: [13767420, 1160205],
+         zoom: 13,
+         maxZoom: 28, minZoom: 11
+    })
+});
+
+//initial view - epsg:3857 center and zoom
+//scale ~1:94433 corresponds roughly to zoom 13 in Web Mercator
+
+//full zooms only
+map.getView().setProperties({constrainResolution: true});
+
+//change cursor
+function pointerOnFeature(evt) {
+    if (evt.dragging) {
+        return;
+    }
+    var hasFeature = map.hasFeatureAtPixel(evt.pixel, {
+        layerFilter: function(layer) {
+            return layer && (layer.get("interactive"));
+        }
+    });
+    map.getViewport().style.cursor = hasFeature ? "pointer" : "";
+}
+map.on('pointermove', pointerOnFeature);
+function styleCursorMove() {
+    map.on('pointerdrag', function() {
+        map.getViewport().style.cursor = "move";
+    });
+    map.on('pointerup', function() {
+        map.getViewport().style.cursor = "default";
+    });
+}
+styleCursorMove();
+
+////small screen definition
+    var hasTouchScreen = map.getViewport().classList.contains('ol-touch');
+    var isSmallScreen = window.innerWidth < 650;
+
+////controls container
+
+    //top left container
+    var topLeftContainer = new ol.control.Control({
+        element: (() => {
+            var topLeftContainer = document.createElement('div');
+            topLeftContainer.id = 'top-left-container';
+            return topLeftContainer;
+        })(),
+    });
+    map.addControl(topLeftContainer)
+
+    //bottom left container
+    var bottomLeftContainer = new ol.control.Control({
+        element: (() => {
+            var bottomLeftContainer = document.createElement('div');
+            bottomLeftContainer.id = 'bottom-left-container';
+            return bottomLeftContainer;
+        })(),
+    });
+    map.addControl(bottomLeftContainer)
+  
+    //top right container
+    var topRightContainer = new ol.control.Control({
+        element: (() => {
+            var topRightContainer = document.createElement('div');
+            topRightContainer.id = 'top-right-container';
+            return topRightContainer;
+        })(),
+    });
+    map.addControl(topRightContainer)
+
+    //bottom right container
+    var bottomRightContainer = new ol.control.Control({
+        element: (() => {
+            var bottomRightContainer = document.createElement('div');
+            bottomRightContainer.id = 'bottom-right-container';
+            return bottomRightContainer;
+        })(),
+    });
+    map.addControl(bottomRightContainer)
+
+//popup
+var container = document.getElementById('popup');
+var content = document.getElementById('popup-content');
+var closer = document.getElementById('popup-closer');
+var sketch;
+
+function stopMediaInPopup() {
+    var mediaElements = container.querySelectorAll('audio, video');
+    mediaElements.forEach(function(media) {
+        media.pause();
+        media.currentTime = 0;
+    });
+}
+closer.onclick = function() {
+    container.style.display = 'none';
+    closer.blur();
+    stopMediaInPopup();
+    return false;
+};
+var overlayPopup = new ol.Overlay({
+    element: container,
+	autoPan: true
+});
+map.addOverlay(overlayPopup)
+    
+    
+var NO_POPUP = 0
+var ALL_FIELDS = 1
+
+/**
+ * Returns either NO_POPUP, ALL_FIELDS or the name of a single field to use for
+ * a given layer
+ * @param layerList {Array} List of ol.Layer instances
+ * @param layer {ol.Layer} Layer to find field info about
+ */
+function getPopupFields(layerList, layer) {
+    // Determine the index that the layer will have in the popupLayers Array,
+    // if the layersList contains more items than popupLayers then we need to
+    // adjust the index to take into account the base maps group
+    var idx = layersList.indexOf(layer) - (layersList.length - popupLayers.length);
+    return popupLayers[idx];
+}
+ 
+//highligth collection
+var collection = new ol.Collection();
+var featureOverlay = new ol.layer.Vector({
+    map: map,
+    source: new ol.source.Vector({
+        features: collection,
+        useSpatialIndex: false // optional, might improve performance
+    }),
+    style: [new ol.style.Style({
+        stroke: new ol.style.Stroke({
+            color: '#ff0000',
+            width: 3
+        }),
+        fill: new ol.style.Fill({
+            color: 'rgba(255,0,0,0.15)'
+        }),
+    })],
+    updateWhileAnimating: true, // optional, for instant visual feedback
+    updateWhileInteracting: true // optional, for instant visual feedback
+});
+
+var selectionOverlay = new ol.layer.Vector({
+    map: map,
+    source: new ol.source.Vector({
+        useSpatialIndex: false
+    }),
+    style: new ol.style.Style({
+        stroke: new ol.style.Stroke({
+            color: 'rgba(255, 0, 0, 1.0)',
+            width: 4
+        }),
+        fill: new ol.style.Fill({
+            color: 'rgba(255, 0, 0, 0.2)'
+        })
+    }),
+    updateWhileAnimating: true,
+    updateWhileInteracting: true,
+    interactive: false
+});
+
+var selectedFeature = null;
+var zoomTimeoutId = null;
+
+function hideMapLabels() {
+    if (!labelsHidden) {
+        labelsHidden = true;
+        if (map) {
+            map.render();
+        }
+    }
+}
+
+function showMapLabels() {
+    if (labelsHidden) {
+        labelsHidden = false;
+        if (map) {
+            map.render();
+        }
+    }
+}
+
+function clearCadastralInfo() {
+    var target = document.getElementById('cadastral-info');
+    if (target) {
+        target.innerHTML = '<p class="hint">Click a cadastral lot on the map to view its attributes here.</p>';
+    }
+    // Clear the stored feature data
+    window.selectedFeatureDataForPrint = null;
+    // Hide the cadastral panel when clearing info
+    var panel = document.querySelector('.cadastral-panel');
+    if (panel) {
+        panel.classList.add('hidden');
+    }
+}
+
+function clearSelectedFeature() {
+    selectionOverlay.getSource().clear();
+    if (highlight) {
+        featureOverlay.getSource().removeFeature(highlight);
+        highlight = null;
+    }
+    selectedFeature = null;
+    labelOpacity = 1.0;
+    if (map) {
+        map.render();
+    }
+    clearCadastralInfo();
+    // Cancel any pending zoom operation
+    if (zoomTimeoutId !== null) {
+        clearTimeout(zoomTimeoutId);
+        zoomTimeoutId = null;
+    }
+}
+
+function getBarangayFromPin(pin) {
+    if (!pin || typeof pin !== 'string') return '';
+    var parts = pin.replace(/\s+/g, '').split('-');
+    if (parts.length < 3) return '';
+    var code = parts[2];
+    var map = {
+        '001': 'POBLACION',
+        '002': 'AWIHAO',
+        '003': 'BAGAKAY',
+        '004': 'BATO',
+        '005': 'BIGA',
+        '006': 'BULONGAN',
+        '007': 'BUNGA',
+        '008': 'CABITOONAN',
+        '009': 'CALONG-CALONG',
+        '010': 'CAMBANG-UG',
+        '011': 'CAMPO 8',
+        '012': 'CANLULAMPAO',
+        '013': 'CANTABACO',
+        '014': 'CAPT. CLAUDIO',
+        '015': 'CARMEN',
+        '016': 'DAS',
+        '017': 'DUMLOG',
+        '018': 'GEN. CLIMACO',
+        '019': 'IBO',
+        '020': 'ILIHAN',
+        '021': 'LANDAHAN',
+        '022': 'LOAY',
+        '023': 'LURAY II',
+        '024': 'MAGDUGO',
+        '025': 'MATAB-ANG',
+        '026': 'MEDIA-ONCE',
+        '027': 'PANGAMIHAN',
+        '028': 'POOG',
+        '029': 'PUTINGBATO',
+        '030': 'SAGAY',
+        '031': 'SAM-ANG',
+        '032': 'SANGI',
+        '033': 'STO, NIÑO',
+        '034': 'SUBAYON',
+        '035': 'TALAVERA',
+        '036': 'TUBOD',
+        '037': 'TUNGKAY',
+        '038': 'DAANLUNGSOD'
+    };
+    return map[code] || '';
+}
+
+function buildCadastralInfoHtml(feature, layer) {
+    if (!feature || !layer) {
+        return '<p class="hint">Click a cadastral lot on the map to view its attributes here.</p>';
+    }
+
+    var keys = feature.getKeys().filter(function(key) {
+        return key !== 'geometry' && key !== 'layerObject' && key !== 'idO';
+    });
+
+    if (!keys.length) {
+        return '<p class="hint">This feature has no visible cadastral attributes.</p>';
+    }
+
+    var html = '<table>';
+    keys.forEach(function(key) {
+        var label = (layer.get('fieldAliases') || {})[key] || key;
+        var value = feature.get(key);
+
+        if (value === null || value === undefined) {
+            value = '';
+        } else if (Array.isArray(value)) {
+            value = value.join(', ');
+        } else if (typeof value === 'object') {
+            value = JSON.stringify(value);
+        }
+
+        var keyLabel = String(key || '').toLowerCase();
+        var isBarangayField = /barangay|brgy/i.test(keyLabel) || /barangay|brgy/i.test(String(label));
+        if (isBarangayField && !String(value).trim()) {
+            var pinValue = feature.get('PIN') || feature.get('SERVER PIN') || feature.get('pin') || feature.get('server pin');
+            var fallback = getBarangayFromPin(String(pinValue || ''));
+            if (fallback) {
+                value = fallback;
+            }
+        }
+
+        html += '<tr><th>' + label + '</th><td>' + String(value) + '</td></tr>';
+    });
+    html += '</table>';
+    return html;
+}
+
+function updateCadastralInfo(feature, layer) {
+    var target = document.getElementById('cadastral-info');
+    if (!target) {
+        return;
+    }
+    target.innerHTML = buildCadastralInfoHtml(feature, layer);
+    
+    // Extract and store feature data for printing
+    if (feature && layer) {
+        var featureData = {};
+        var keys = feature.getKeys().filter(function(key) {
+            return key !== 'geometry' && key !== 'layerObject' && key !== 'idO' && key !== 'features';
+        });
+        keys.forEach(function(key) {
+            featureData[key] = feature.get(key);
+        });
+        if (!featureData['BARANGAY'] && !featureData['brgy']) {
+            var pinValue = featureData['PIN'] || featureData['SERVER PIN'] || featureData['pin'] || featureData['server pin'] || '';
+            var fallback = getBarangayFromPin(String(pinValue));
+            if (fallback) {
+                featureData['BARANGAY'] = fallback;
+            }
+        }
+        window.selectedFeatureDataForPrint = featureData;
+        console.log('Feature data stored for printing:', window.selectedFeatureDataForPrint);
+    }
+    
+    // Show the cadastral panel when data is loaded
+    var panel = document.querySelector('.cadastral-panel');
+    if (panel) {
+        panel.classList.remove('hidden');
+    }
+}
+
+function getFeatureGeometry(feature) {
+    var clustered = feature.get('features');
+    if (Array.isArray(clustered) && clustered.length > 0) {
+        return clustered[0].getGeometry() || feature.getGeometry();
+    }
+    return feature.getGeometry();
+}
+
+function zoomToFeature(feature) {
+    var geometry = getFeatureGeometry(feature);
+    if (!geometry) {
+        console.log('No geometry found');
+        return;
+    }
+
+    var view = map.getView();
+    var type = geometry.getType && geometry.getType();
+    
+    if (type === 'Point' || type === 'MultiPoint') {
+        var coords = geometry.getCoordinates();
+        if (Array.isArray(coords) && coords.length) {
+            view.setCenter(coords);
+            view.setZoom(18);
+        }
+        return;
+    }
+
+    var extent = geometry.getExtent();
+    if (!extent || isNaN(extent[0]) || isNaN(extent[1]) || isNaN(extent[2]) || isNaN(extent[3])) {
+        console.log('Invalid extent:', extent);
+        return;
+    }
+
+    console.log('Feature LOT NUMBER:', feature.get('LOT NUMBER'));
+    console.log('Extent:', extent);
+    console.log('Map size:', map.getSize());
+    
+    // Calculate center and set it explicitly first
+    var center = ol.extent.getCenter(extent);
+    console.log('Calculated center:', center);
+    view.setCenter(center);
+    
+    // Then animate to fit the extent with proper zoom
+    view.fit(extent, {
+        size: map.getSize(),
+        padding: [75, 75, 75, 75],
+        maxZoom: 18,
+        minZoom: 11,
+        duration: 500
+    });
+}
+
+function selectFeature(feature, layer) {
+    if (selectedFeature === feature) {
+        clearSelectedFeature();
+        return;
+    }
+    clearSelectedFeature();
+    selectedFeature = feature;
+    labelOpacity = 0.7;
+    if (map) {
+        map.render();
+    }
+    if (highlight) {
+        featureOverlay.getSource().removeFeature(highlight);
+        highlight = null;
+    }
+    var selectedClone = feature.clone();
+    selectionOverlay.getSource().addFeature(selectedClone);
+    // Update the cadastral info card first so any layout shift happens
+    // before we compute and apply the map fit/center.
+    updateCadastralInfo(feature, layer);
+
+    // Allow the browser to complete layout changes (card content), then
+    // refresh map size and zoom to the feature.
+    // Cancel any existing timeout first to prevent stale zoom operations
+    if (zoomTimeoutId !== null) {
+        clearTimeout(zoomTimeoutId);
+    }
+    
+    // Increased timeout to ensure DOM is fully rendered
+    zoomTimeoutId = setTimeout(function() {
+        // Only proceed if this is still the selected feature
+        if (selectedFeature === feature) {
+            map.updateSize();
+            zoomToFeature(feature);
+        }
+        zoomTimeoutId = null;
+    }, 250);
+}
+
+function handleFeatureSelection(evt) {
+    var pixel = evt.pixel;
+    var clickedFeature = null;
+    var clickedLayer = null;
+    map.forEachFeatureAtPixel(pixel, function(feature, layer) {
+        if (layer === selectionOverlay) {
+            return;
+        }
+        if (layer && feature instanceof ol.Feature && (layer.get('interactive') || layer.get('interactive') === undefined)) {
+            clickedFeature = feature;
+            clickedLayer = layer;
+            return true;
+        }
+    });
+    if (clickedFeature) {
+        selectFeature(clickedFeature, clickedLayer);
+    } else {
+        clearSelectedFeature();
+    }
+}
+
+var doHighlight = true;
+var doHover = false;
+
+function canHighlightFeature() {
+    return doHighlight && !selectedFeature;
+}
+
+function createPopupField(currentFeature, currentFeatureKeys, layer) {
+    var popupText = '';
+    for (var i = 0; i < currentFeatureKeys.length; i++) {
+        if (currentFeatureKeys[i] != 'geometry' && currentFeatureKeys[i] != 'layerObject' && currentFeatureKeys[i] != 'idO') {
+            var popupField = '';
+            if (layer.get('fieldLabels')[currentFeatureKeys[i]] == "hidden field") {
+                continue;
+            } else if (layer.get('fieldLabels')[currentFeatureKeys[i]] == "inline label - visible with data") {
+                if (currentFeature.get(currentFeatureKeys[i]) == null) {
+                    continue;
+                }
+            }
+            if (layer.get('fieldLabels')[currentFeatureKeys[i]] == "inline label - always visible" ||
+                layer.get('fieldLabels')[currentFeatureKeys[i]] == "inline label - visible with data") {
+                popupField += '<th>' + layer.get('fieldAliases')[currentFeatureKeys[i]] + '</th><td>';
+            } else {
+                popupField += '<td colspan="2">';
+            }
+            if (layer.get('fieldLabels')[currentFeatureKeys[i]] == "header label - visible with data") {
+                if (currentFeature.get(currentFeatureKeys[i]) == null) {
+                    continue;
+                }
+            }
+            if (layer.get('fieldLabels')[currentFeatureKeys[i]] == "header label - always visible" ||
+                layer.get('fieldLabels')[currentFeatureKeys[i]] == "header label - visible with data") {
+                popupField += '<strong>' + layer.get('fieldAliases')[currentFeatureKeys[i]] + '</strong><br />';
+            }
+            if (layer.get('fieldImages')[currentFeatureKeys[i]] != "ExternalResource") {
+				popupField += (currentFeature.get(currentFeatureKeys[i]) != null ? autolinker.link(currentFeature.get(currentFeatureKeys[i]).toLocaleString()) + '</td>' : '');
+			} else {
+				var fieldValue = currentFeature.get(currentFeatureKeys[i]);
+				if (/\.(gif|jpg|jpeg|tif|tiff|png|avif|webp|svg)$/i.test(fieldValue)) {
+					popupField += (fieldValue != null ? '<img src="images/' + fieldValue.replace(/[\\\/:]/g, '_').trim() + '" /></td>' : '');
+				} else if (/\.(mp4|webm|ogg|avi|mov|flv)$/i.test(fieldValue)) {
+					popupField += (fieldValue != null ? '<video controls><source src="images/' + fieldValue.replace(/[\\\/:]/g, '_').trim() + '" type="video/mp4">Il tuo browser non supporta il tag video.</video></td>' : '');
+				} else if (/\.(mp3|wav|ogg|aac|flac)$/i.test(fieldValue)) {
+                    popupField += (fieldValue != null ? '<audio controls><source src="images/' + fieldValue.replace(/[\\\/:]/g, '_').trim() + '" type="audio/mpeg">Il tuo browser non supporta il tag audio.</audio></td>' : '');
+                } else {
+					popupField += (fieldValue != null ? autolinker.link(fieldValue.toLocaleString()) + '</td>' : '');
+				}
+			}
+            popupText += '<tr>' + popupField + '</tr>';
+        }
+    }
+    return popupText;
+}
+
+var highlight;
+var autolinker = new Autolinker({truncate: {length: 30, location: 'smart'}});
+
+function onPointerMove(evt) {
+    if (!doHover && !doHighlight) {
+        return;
+    }
+    var pixel = map.getEventPixel(evt.originalEvent);
+    var coord = evt.coordinate;
+    var currentFeature;
+    var currentLayer;
+    var currentFeatureKeys;
+    var clusteredFeatures;
+    var clusterLength;
+    var popupText = '<ul>';
+
+    // Collect all features and their layers at the pixel
+    var featuresAndLayers = [];
+    map.forEachFeatureAtPixel(pixel, function(feature, layer) {
+        if (layer && feature instanceof ol.Feature && (layer.get("interactive") || layer.get("interactive") === undefined)) {
+            featuresAndLayers.push({ feature, layer });
+        }
+    });
+
+    // Iterate over the features and layers in reverse order
+    for (var i = featuresAndLayers.length - 1; i >= 0; i--) {
+        var feature = featuresAndLayers[i].feature;
+        var layer = featuresAndLayers[i].layer;
+        var doPopup = false;
+        for (k in layer.get('fieldImages')) {
+            if (layer.get('fieldImages')[k] != "Hidden") {
+                doPopup = true;
+            }
+        }
+        currentFeature = feature;
+        currentLayer = layer;
+        clusteredFeatures = feature.get("features");
+        if (clusteredFeatures) {
+            clusterLength = clusteredFeatures.length;
+        }
+        if (typeof clusteredFeatures !== "undefined") {
+            if (doPopup) {
+                for(var n=0; n<clusteredFeatures.length; n++) {
+                    currentFeature = clusteredFeatures[n];
+                    currentFeatureKeys = currentFeature.getKeys();
+                    popupText += '<li><table>'
+                    popupText += '<a>' + '<b>' + layer.get('popuplayertitle') + '</b>' + '</a>';
+                    popupText += createPopupField(currentFeature, currentFeatureKeys, layer);
+                    popupText += '</table></li>';    
+                }
+            }
+        } else {
+            currentFeatureKeys = currentFeature.getKeys();
+            if (doPopup) {
+                popupText += '<li><table>';
+                popupText += '<a>' + '<b>' + layer.get('popuplayertitle') + '</b>' + '</a>';
+                popupText += createPopupField(currentFeature, currentFeatureKeys, layer);
+                popupText += '</table></li>';
+            }
+        }
+    }
+
+    if (popupText == '<ul>') {
+        popupText = '';
+    } else {
+        popupText += '</ul>';
+    }
+    
+	if (canHighlightFeature()) {
+        if (currentFeature !== highlight) {
+            if (highlight) {
+                featureOverlay.getSource().removeFeature(highlight);
+            }
+            if (currentFeature) {
+                var featureStyle
+                if (typeof clusteredFeatures == "undefined") {
+					var style = currentLayer.getStyle();
+					var styleFunction = typeof style === 'function' ? style : function() { return style; };
+					featureStyle = styleFunction(currentFeature)[0];
+				} else {
+					featureStyle = currentLayer.getStyle().toString();
+				}
+
+                if (currentFeature.getGeometry().getType() == 'Point' || currentFeature.getGeometry().getType() == 'MultiPoint') {
+                    var radius
+                    if (typeof clusteredFeatures == "undefined") {
+                        radius = featureStyle.getImage().getRadius();
+                    } else {
+                        radius = parseFloat(featureStyle.split('radius')[1].split(' ')[1]) + clusterLength;
+                    }
+
+                    highlightStyle = new ol.style.Style({
+                        image: new ol.style.Circle({
+                            fill: new ol.style.Fill({
+                                color: "rgba(255, 0, 0, 0.7)"
+                            }),
+                            stroke: new ol.style.Stroke({
+                                color: 'rgba(255, 255, 255, 1.0)',
+                                width: 2
+                            }),
+                            radius: radius
+                        })
+                    })
+                } else if (currentFeature.getGeometry().getType() == 'LineString' || currentFeature.getGeometry().getType() == 'MultiLineString') {
+
+                    var featureWidth = 3;
+                    if (featureStyle && featureStyle.getStroke()) {
+                        featureWidth = Math.max(3, featureStyle.getStroke().getWidth() + 2);
+                    }
+
+                    highlightStyle = new ol.style.Style({
+                        stroke: new ol.style.Stroke({
+                            color: 'rgba(255, 0, 0, 1.0)',
+                            lineDash: null,
+                            width: featureWidth
+                        })
+                    });
+
+                } else {
+                    highlightStyle = new ol.style.Style({
+                        stroke: new ol.style.Stroke({
+                            color: 'rgba(255, 0, 0, 1.0)',
+                            width: 3
+                        }),
+                        fill: new ol.style.Fill({
+                            color: 'rgba(255, 0, 0, 0.2)'
+                        })
+                    })
+                }
+                featureOverlay.getSource().addFeature(currentFeature);
+                featureOverlay.setStyle(highlightStyle);
+            }
+            highlight = currentFeature;
+        }
+    }
+
+    if (doHover) {
+        if (popupText) {
+			content.innerHTML = popupText;
+            container.style.display = 'block';
+            overlayPopup.setPosition(coord);
+        } else {
+            container.style.display = 'none';
+            closer.blur();
+        }
+    }
+};
+
+map.on('pointermove', onPointerMove);
+
+var popupContent = '';
+var popupCoord = null;
+var featuresPopupActive = false;
+
+function updatePopup() {
+    if (popupContent) {
+        content.innerHTML = popupContent;
+        container.style.display = 'block';
+		overlayPopup.setPosition(popupCoord);
+    } else {
+        container.style.display = 'none';
+        closer.blur();
+        stopMediaInPopup();
+    }
+} 
+
+function onSingleClickFeatures(evt) {
+    if (doHover || sketch) {
+        return;
+    }
+    if (!featuresPopupActive) {
+        featuresPopupActive = true;
+    }
+    var pixel = map.getEventPixel(evt.originalEvent);
+    var coord = evt.coordinate;
+    var currentFeature;
+    var currentFeatureKeys;
+    var clusteredFeatures;
+    var popupText = '<ul>';
+    
+    map.forEachFeatureAtPixel(pixel, function(feature, layer) {
+        if (layer && feature instanceof ol.Feature && (layer.get("interactive") || layer.get("interactive") === undefined)) {
+            var doPopup = false;
+            for (var k in layer.get('fieldImages')) {
+                if (layer.get('fieldImages')[k] !== "Hidden") {
+                    doPopup = true;
+                }
+            }
+            currentFeature = feature;
+            clusteredFeatures = feature.get("features");
+            if (typeof clusteredFeatures !== "undefined") {
+                if (doPopup) {
+                    for(var n = 0; n < clusteredFeatures.length; n++) {
+                        currentFeature = clusteredFeatures[n];
+                        currentFeatureKeys = currentFeature.getKeys();
+                        popupText += '<li><table>';
+                        popupText += '<a><b>' + layer.get('popuplayertitle') + '</b></a>';
+                        popupText += createPopupField(currentFeature, currentFeatureKeys, layer);
+                        popupText += '</table></li>';    
+                    }
+                }
+            } else {
+                currentFeatureKeys = currentFeature.getKeys();
+                if (doPopup) {
+                    popupText += '<li><table>';
+                    popupText += '<a><b>' + layer.get('popuplayertitle') + '</b></a>';
+                    popupText += createPopupField(currentFeature, currentFeatureKeys, layer);
+                    popupText += '</table>';
+                }
+            }
+        }
+    });
+    if (popupText === '<ul>') {
+        popupText = '';
+    } else {
+        popupText += '</ul>';
+    }
+	
+	popupContent = popupText;
+    popupCoord = coord;
+    updatePopup();
+}
+
+function onSingleClickWMS(evt) {
+    if (doHover || sketch) {
+        return;
+    }
+    if (!featuresPopupActive) {
+        popupContent = '';
+    }
+    var coord = evt.coordinate;
+    var viewProjection = map.getView().getProjection();
+    var viewResolution = map.getView().getResolution();
+
+    for (var i = 0; i < wms_layers.length; i++) {
+        if (wms_layers[i][1] && wms_layers[i][0].getVisible()) {
+            var url = wms_layers[i][0].getSource().getFeatureInfoUrl(
+                evt.coordinate, viewResolution, viewProjection, {
+                    'INFO_FORMAT': 'text/html',
+                });
+            if (url) {
+                const wmsTitle = wms_layers[i][0].get('popuplayertitle');
+                var ldsRoller = '<div class="roller-switcher" style="height: 25px; width: 25px;"></div>';
+
+                popupCoord = coord;
+                popupContent += ldsRoller;
+                updatePopup();
+
+                var timeoutPromise = new Promise((resolve, reject) => {
+                    setTimeout(() => {
+                        reject(new Error('Timeout exceeded'));
+                    }, 5000); // (5 second)
+                });
+
+                // Function to try fetch with different option
+                function tryFetch(urls) {
+                    if (urls.length === 0) {
+                        return Promise.reject(new Error('All fetch attempts failed'));
+                    }
+                    return fetch(urls[0])
+                        .then((response) => {
+                            if (response.ok) {
+                                return response.text();
+                            } else {
+                                throw new Error('Fetch failed');
+                            }
+                        })
+                        .catch(() => tryFetch(urls.slice(1))); // Try next URL
+                }
+
+                // List of URLs to try
+                // The first URL is the original, the second is the encoded version, and the third is the proxy
+                const urlsToTry = [
+                    url,
+                    encodeURIComponent(url),
+                    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
+                ];
+
+                Promise.race([tryFetch(urlsToTry), timeoutPromise])
+                    .then((html) => {
+                        if (html.indexOf('<table') !== -1) {
+                            popupContent += '<a><b>' + wmsTitle + '</b></a>';
+                            popupContent += html + '<p></p>';
+                            updatePopup();
+                        }
+                    })
+                    .finally(() => {
+                        setTimeout(() => {
+                            var loaderIcon = document.querySelector('.roller-switcher');
+                            if (loaderIcon) loaderIcon.remove();
+                        }, 500); // (0.5 second)
+                    });
+            }
+        }
+    }
+}
+
+map.on('singleclick', handleFeatureSelection);
+map.on('singleclick', onSingleClickFeatures);
+map.on('singleclick', onSingleClickWMS);
+
+document.addEventListener('click', function(event) {
+    var card = document.querySelector('.map-card');
+    if (!card) {
+        return;
+    }
+    var path = event.composedPath ? event.composedPath() : (function(el) {
+        var p = [];
+        while (el) {
+            p.push(el);
+            el = el.parentNode;
+        }
+        return p;
+    })(event.target);
+    if (!path.includes(card)) {
+        clearSelectedFeature();
+    }
+});
+
+//get container
+var topLeftContainerDiv = document.getElementById('top-left-container')
+var bottomLeftContainerDiv = document.getElementById('bottom-left-container')
+var topRightContainerDiv = document.getElementById('top-right-container')
+var bottomRightContainerDiv = document.getElementById('bottom-right-container')
+
+//title
+
+//abstract
+
+
+//geolocate
+
+
+
+//measurement
+
+
+
+
+
+//geocoder
+
+  //Layer to represent the point of the geocoded address
+  var geocoderLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+  });
+  map.addLayer(geocoderLayer);
+  var vectorSource = geocoderLayer.getSource();
+
+  //Variable used to store the coordinates of geocoded addresses
+  var obj2 = {
+  value: '',
+  letMeKnow() {
+      //console.log(`Geocoded position: ${this.gcd}`);
+  },
+  get gcd() {
+      return this.value;
+  },
+  set gcd(value) {
+      this.value = value;
+      this.letMeKnow();
+  }
+  }
+
+  var obj = {
+      value: '',
+      get label() {
+          return this.value;
+      },
+      set label(value) {
+          this.value = value;
+      }
+  }
+
+  // Function to handle the selected address
+  function onSelected(feature) {
+      obj.label = feature;
+      input.value = typeof obj.label.properties.label === "undefined"? obj.label.properties.display_name : obj.label.properties.label;
+      var coordinates = ol.proj.transform(
+      [feature.geometry.coordinates[0], feature.geometry.coordinates[1]],
+      "EPSG:4326",
+      map.getView().getProjection()
+      );
+      vectorSource.clear(true);
+      obj2.gcd = [feature.geometry.coordinates[0], feature.geometry.coordinates[1]];
+      var marker = new ol.Feature(new ol.geom.Point(coordinates));
+      var zIndex = 1;
+      marker.setStyle(new ol.style.Style({
+      image: new ol.style.Icon(({
+          anchor: [0.5, 1],
+          anchorXUnits: 'fraction',
+          anchorYUnits: 'fraction',
+          scale: 0.7,
+          opacity: 1,
+          src: "./resources/marker.png",
+          zIndex: zIndex
+      })),
+      zIndex: zIndex
+      }));
+      vectorSource.addFeature(marker);
+      map.getView().setCenter(coordinates);
+      map.getView().setZoom(18);
+  }
+
+  // Format the result in the autocomplete search bar
+  var formatResult = function (feature, el) {
+      var title = document.createElement("strong");
+      el.appendChild(title);
+      var detailsContainer = document.createElement("small");
+      el.appendChild(detailsContainer);
+      var details = [];
+      title.innerHTML = feature.properties.label || feature.properties.display_name;
+      var types = {
+      housenumber: "numéro",
+      street: "rue",
+      locality: "lieu-dit",
+      municipality: "commune",
+      };
+      if (
+      feature.properties.city &&
+      feature.properties.city !== feature.properties.name
+      ) {
+      details.push(feature.properties.city);
+      }
+      if (feature.properties.context) {
+      details.push(feature.properties.context);
+      }
+      detailsContainer.innerHTML = details.join(", ");
+  };
+
+  // Define a class to create the control button for the search bar in a div tag
+  class AddDomControl extends ol.control.Control {
+      constructor(elementToAdd, opt_options) {
+      const options = opt_options || {};
+
+      const element = document.createElement("div");
+      if (options.className) {
+          element.className = options.className;
+      }
+      element.appendChild(elementToAdd);
+
+      super({
+          element: element,
+          target: options.target,
+      });
+      }
+  }
+
+  // Function to show you can do something with the returned elements
+  function myHandler(featureCollection) {
+      //console.log(featureCollection);
+  }
+
+  // URL for API
+  const url = {"Nominatim OSM": "https://nominatim.openstreetmap.org/search?format=geojson&addressdetails=1&",
+  "France BAN": "https://api-adresse.data.gouv.fr/search/?"}
+  var API_URL = "//api-adresse.data.gouv.fr";
+
+//layer search
+
+
+//scalebar
+
+
+//layerswitcher
+
+var layerSwitcher = new ol.control.LayerSwitcher({
+    tipLabel: "Layers",
+    target: 'top-right-container'
+});
+map.addControl(layerSwitcher);
+    
+
+
+
+
+
+//attribution
+var bottomAttribution = new ol.control.Attribution({
+  collapsible: false,
+  collapsed: false,
+  className: 'bottom-attribution'
+});
+map.addControl(bottomAttribution);
+
+map.once('rendercomplete', function() {
+  var bottomAttributionUl = bottomAttribution.element.querySelector('ul');
+  if (bottomAttributionUl) {
+    var layerAttrs = Array.from(bottomAttributionUl.querySelectorAll('li'))
+      .map(function(li) { return li.innerHTML.trim(); }).filter(Boolean);
+    var attribHtml = `
+    <a href="https://github.com/qgis2web/qgis2web">qgis2web</a> &middot;
+    <a href="https://openlayers.org/">OpenLayers</a> &middot;
+    <a href="https://qgis.org/">QGIS</a>`;
+    if (layerAttrs.length > 0) { attribHtml += ' &nbsp;|&nbsp; ' + layerAttrs.join(', '); }
+    bottomAttributionUl.innerHTML = '<li>' + attribHtml + '</li>';
+  }
+});
+
+
+// Disable "popup on hover" or "highlight on hover" if ol-control mouseover
+var preDoHover = doHover;
+var preDoHighlight = doHighlight;
+var isPopupAllActive = false;
+document.addEventListener('DOMContentLoaded', function() {
+	if (doHover || doHighlight) {
+		var controlElements = document.getElementsByClassName('ol-control');
+		for (var i = 0; i < controlElements.length; i++) {
+			controlElements[i].addEventListener('mouseover', function() { 
+				doHover = false;
+				doHighlight = false;
+			});
+			controlElements[i].addEventListener('mouseout', function() {
+				doHover = preDoHover;
+				if (isPopupAllActive) { return }
+				doHighlight = preDoHighlight;
+			});
+		}
+	}
+});
+
+
+//move controls inside containers, in order
+    //zoom
+    var zoomControl = document.getElementsByClassName('ol-zoom')[0];
+    if (zoomControl) {
+        topLeftContainerDiv.appendChild(zoomControl);
+    }
+    //geolocate
+    if (typeof geolocateControl !== 'undefined') {
+        topLeftContainerDiv.appendChild(geolocateControl);
+    }
+    //measure
+    if (typeof measureControl !== 'undefined') {
+        topLeftContainerDiv.appendChild(measureControl);
+    }
+    //search layer
+    var searchLayerControl = document.getElementsByClassName('search-layer')[0];
+    if (searchLayerControl) {
+        topLeftContainerDiv.appendChild(searchLayerControl);
+    }
+    //scale line
+    var scaleLineControl = document.getElementsByClassName('ol-scale-line')[0];
+    if (scaleLineControl) {
+        scaleLineControl.className += ' ol-control';
+        bottomLeftContainerDiv.appendChild(scaleLineControl);
+    }
+    //attribution
+    var attributionControl = document.getElementsByClassName('bottom-attribution')[0];
+    if (attributionControl) {
+        bottomRightContainerDiv.appendChild(attributionControl);
+    }

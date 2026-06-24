@@ -64,7 +64,22 @@ function initializePage() {
   const initialSize = requestedSize === 'letter' ? 'letter' : 'a4';
   paperSizeSelect.value = initialSize;
   applyPaperSize(initialSize);
-  renderTracerRows();
+
+  const rawData = localStorage.getItem('tracerPrintData');
+  let rows = [];
+  if (rawData) {
+    try {
+      const parsed = JSON.parse(rawData);
+      if (Array.isArray(parsed.rows)) {
+        rows = parsed.rows;
+      }
+    } catch (err) {
+      console.warn('Unable to parse tracer print data:', err);
+    }
+    localStorage.removeItem('tracerPrintData');
+  }
+
+  renderTracerRows(rows);
   updateFooter();
 }
 

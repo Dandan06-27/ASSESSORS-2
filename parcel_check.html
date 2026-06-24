@@ -76,15 +76,9 @@
     </main>
     <section class="section card" id="tracer-section">
       <h2>TRACER</h2>
+      <div class="tracer-intro">Hierarchy chart of the Land Partition</div>
       <div id="tracer-hierarchy" class="tracer-hierarchy" aria-live="polite">
-        <button id="open-full-tracer" class="tracer-open-btn" title="Open full tracer" aria-label="Open full tracer">
-          <!-- search icon -->
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M21 21l-4.35-4.35" stroke="#0d3264" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle cx="11" cy="11" r="6" stroke="#0d3264" stroke-width="2"/>
-          </svg>
-        </button>
-        <iframe src="tracer.html?embed=chart" class="tracer-embed" title="Tracer hierarchy" loading="lazy" aria-label="Tracer chart"></iframe>
+        <!-- Placeholder: rendered hierarchy chart goes here -->
       </div>
     </section>
   </div>
@@ -487,59 +481,6 @@
   </script>
   <script>
     (function() {
-      function sendParcelToTracer() {
-        try {
-          var iframe = document.querySelector('.tracer-embed');
-          if (!iframe) return;
-          var lotEl = document.querySelector('[data-field="cadastral_LOT_NUMBER"]');
-          var lot = lotEl ? (lotEl.textContent || lotEl.innerText || '').trim() : '';
-          var pinEl = document.querySelector('[data-field="PIN"]');
-          var pin = pinEl ? (pinEl.textContent || pinEl.innerText || '').trim() : '';
-          var barangayEl = document.querySelector('[data-field="Assessors Data_Barangay"]');
-          var barangay = barangayEl ? (barangayEl.textContent || barangayEl.innerText || '').trim() : '';
-          if (!lot) return;
-          // Post message to iframe; allow same-origin or any for now
-          iframe.contentWindow.postMessage({ type: 'parcel-root', lot: lot, pin: pin, barangay: barangay }, '*');
-        } catch (e) { console.warn('Failed to post parcel to tracer iframe', e); }
-      }
-
-      // Send once iframe loads
-      var iframe = document.querySelector('.tracer-embed');
-      if (iframe) iframe.addEventListener('load', function() { setTimeout(sendParcelToTracer, 250); });
-
-      // Click handler for open-full-tracer button
-      var openFullBtn = document.getElementById('open-full-tracer');
-      if (openFullBtn) {
-        openFullBtn.addEventListener('click', function() {
-          try {
-            var lotEl = document.querySelector('[data-field="cadastral_LOT_NUMBER"]');
-            var lot = lotEl ? (lotEl.textContent || lotEl.innerText || '').trim() : '';
-            var pinEl = document.querySelector('[data-field="PIN"]');
-            var pin = pinEl ? (pinEl.textContent || pinEl.innerText || '').trim() : '';
-            var url = 'tracer.html';
-            var params = [];
-            if (lot) params.push('lot=' + encodeURIComponent(lot));
-            if (pin) params.push('pin=' + encodeURIComponent(pin));
-            if (params.length) url += '?' + params.join('&');
-            // open in new tab to keep parcel page available
-            window.open(url, '_blank');
-          } catch (e) { console.warn('Failed to open full tracer', e); }
-        });
-      }
-
-      // Also attempt after DOM ready (in case iframe already loaded)
-      document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(sendParcelToTracer, 500);
-        var target = document.querySelector('[data-field="cadastral_LOT_NUMBER"]');
-        if (target) {
-          var mo = new MutationObserver(function() { sendParcelToTracer(); });
-          mo.observe(target, { childList: true, characterData: true, subtree: true });
-        }
-      });
-    })();
-  </script>
-  <script>
-    (function() {
       var openBtn = document.getElementById('add-partition-link');
       var modal = document.getElementById('add-partition-modal');
       var closeBtn = modal && modal.querySelector('.modal-close');
@@ -670,5 +611,18 @@
       })();
     })();
   </script>
+<script>
+  (function() {
+    var container = document.getElementById('tracer-hierarchy');
+    if (!container) return;
+    container.innerHTML = '\n      <div class="tracer-embed">\n        <div class="tracer-controls" style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">\n          <button id="scrollUp" class="btn">▲</button>\n          <button id="scrollDown" class="btn">▼</button>\n          <button id="fit" class="btn">⤢</button>\n          <button id="resetView" class="btn">Reset</button>\n          <input id="searchInput" placeholder="Search..." style="flex:1;min-width:120px"/>\n          <button id="closeSidebar" style="display:none"></button>\n        </div>\n        <div id="chart-wrap" style="width:100%;height:320px;position:relative;">\n          <div id="chart" class="chart" style="position:relative;"></div>\n        </div>\n        <aside id="sidebar" class="sidebar" aria-hidden="true" style="display:none">\n          <div id="details"></div>\n          <div id="sidebarFooter" class="sidebar-footer hidden"></div>\n        </aside>\n        <div id="addPartitionModal"></div>\n        <form id="addPartitionForm"></form>\n        <button id="cancelAddPartitionBtn" style="display:none"></button>\n        <select id="record-barangay" style="display:none"></select>\n        <select id="record-classification" style="display:none"></select>\n      </div>\n    ';
+
+    var s = document.createElement('script');
+    s.src = 'tracer.js';
+    s.onload = function() { console.debug('tracer.js loaded into parcel tracer-hierarchy'); };
+    s.onerror = function() { console.error('Failed to load tracer.js'); };
+    document.body.appendChild(s);
+  })();
+</script>
 </body>
 </html>

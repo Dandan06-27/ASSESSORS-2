@@ -14,16 +14,87 @@ function getProp(props, keys) {
 function getBarangayCode(name) {
   if (!name) return '';
   let n = String(name).toUpperCase().trim();
+  // remove parenthetical annotations like "(Lutopan)"
+  n = n.replace(/\(.*\)/g, '').trim();
   n = n.replace(/[\u2019\u2018\u201C\u201D]/g, "'");
-  n = n.replace(/[^A-Z0-9, ]+/g, '');
+  // normalize some common variants
+  n = n.replace(/\bCAMP\b/g, 'CAMPO');
+  n = n.replace(/\bCAPITAN\b/g, 'CAPT');
+  n = n.replace(/\bCAPTAIN\b/g, 'CAPT');
+
+  // canonical map (source codes remain unchanged)
   const map = {
     'POBLACION': '001', 'AWIHAO': '002', 'BAGAKAY': '003', 'BATO': '004', 'BIGA': '005', 'BULONGAN': '006', 'BUNGA': '007', 'CABITOONAN': '008', 'CALONGCALONG': '009', 'CAMBANGUG': '010', 'CAMPO 8': '011', 'CANLULAMPAO': '012', 'CANTABACO': '013', 'CAPT. CLAUDIO': '014', 'CARMEN': '015', 'DAS': '016', 'DUMLOG': '017', 'GEN. CLIMACO': '018', 'IBO': '019', 'ILIHAN': '020', 'LANDAHAN': '021', 'LOAY': '022', 'LURAY II': '023', 'MAGDUGO': '024', 'MATAB-ANG': '025', 'MEDIA-ONCE': '026', 'PANGAMIHAN': '027', 'POOG': '028', 'PUTINGBATO': '029', 'SAGAY': '030', 'SAM-ANG': '031', 'SANGI': '032', 'STO, NIÑO': '033', 'STO NINO': '033', 'SUBAYON': '034', 'TALAVERA': '035', 'TUBOD': '036', 'TUNGKAY': '037', 'DAANLUNGSOD': '038'
   };
-  if (map[n]) return map[n];
-  const compact = n.replace(/[^A-Z0-9]/g, '');
-  for (const k in map) {
-    if (k.replace(/[^A-Z0-9]/g, '') === compact) return map[k];
+
+  // normalizer used for map keys and input
+  function normalizeKey(s) {
+    return String(s || '').toUpperCase().replace(/\(.*\)/g, '').replace(/[\u2019\u2018\u201C\u201D]/g, "'").replace(/\bCAMP\b/g, 'CAMPO').replace(/\bCAPITAN\b/g, 'CAPT').replace(/\bCAPTAIN\b/g, 'CAPT').replace(/[^A-Z0-9 ]+/g, '').trim();
   }
+
+  const clean = normalizeKey(n);
+
+  // build normalized lookup (must exist before any alias checks)
+  const normalizedMap = {};
+  Object.keys(map).forEach(k => {
+    normalizedMap[normalizeKey(k)] = map[k];
+  });
+
+  // explicit alias entries for known variants that appear in the UI
+  const aliasToCanonical = {
+    'CANLUMAMPAO': 'CANLULAMPAO',
+    'CANLUMAMP AO': 'CANLULAMPAO',
+    'DAANGLUNGSOD': 'DAANLUNGSOD',
+    'DONANDRESSORIANO': 'DAS',
+    'DONANDRESSORIANO LUTOPAN': 'DAS',
+    'ANDRESSORIANO': 'DAS'
+  };
+  Object.entries(aliasToCanonical).forEach(([a, canonical]) => {
+    const na = normalizeKey(a);
+    const nc = normalizeKey(canonical);
+    if (normalizedMap[nc]) normalizedMap[na] = normalizedMap[nc];
+  });
+
+  // quick aliases for known problematic variants (handle misspellings and token variants)
+  const compact = clean.replace(/[^A-Z0-9]/g, '');
+
+  // Canlumampao variants: CANLULAMPAO, CANLUMAMP A O, CANLUMAMPAO, etc.
+  if (/CANLU?L?AM?PA?O?/.test(compact) || /CANLUMAMPAO|CANLULAMPAO/.test(compact)) {
+    return normalizedMap[normalizeKey('CANLULAMPAO')];
+  }
+
+  // Daanglungsod variants
+  if (compact.includes('DAANLUNGSOD') || /DAANGLUNGSOD|DAANLUNGSOD/.test(compact)) {
+    return normalizedMap[normalizeKey('DAANLUNGSOD')];
+  }
+
+  // Don Andres Soriano variants and DAS lutopan entries
+  const nUpper = n.toUpperCase();
+  if (nUpper.includes('DON') && nUpper.includes('ANDRES') && nUpper.includes('SORIANO')) {
+    return normalizedMap[normalizeKey('DAS')];
+  }
+  if (nUpper.includes('SORIANO') || nUpper.includes('LUTOPAN') || compact === 'DAS') {
+    return normalizedMap[normalizeKey('DAS')];
+  }
+
+  // exact normalized match
+  if (normalizedMap[clean]) return normalizedMap[clean];
+
+  // compact forms for fuzzy matching
+  const compactInput = clean.replace(/[^A-Z0-9]/g, '');
+  for (const nk in normalizedMap) {
+    const compactKey = nk.replace(/[^A-Z0-9]/g, '');
+    if (!compactInput || !compactKey) continue;
+    if (compactKey === compactInput) return normalizedMap[nk];
+    if (compactKey.includes(compactInput) || compactInput.includes(compactKey)) return normalizedMap[nk];
+    // token-based partial match
+    const tokens = clean.split(/\s+/).filter(Boolean);
+    for (const t of tokens) {
+      if (t.length < 3) continue;
+      if (nk.indexOf(t) !== -1 || nk.replace(/[^A-Z0-9]/g, '').indexOf(t.replace(/[^A-Z0-9]/g, '')) !== -1) return normalizedMap[nk];
+    }
+  }
+
   return '';
 }
 
@@ -106,7 +177,8 @@ function buildFromLayer() {
       section: getProp(p, ['SECTION', 'Section', 'SECTION NO', 'SECTION_NO']) || '',
       area: getProp(p, ['AREA (m²)', 'AREA (M²)', 'AREA', 'Area', 'AREA_M2', 'AREA_M²', 'TOTAL_AREA']) || '',
       remarks: getProp(p, ['REMARKS', 'Remarks']) || '',
-      children: []
+      children: [],
+      collapsed: true
     };
 
     root.children.push(cadNode);
@@ -140,6 +212,7 @@ const searchInput = document.getElementById('searchInput');
 const sidebar = document.getElementById('sidebar');
 const details = document.getElementById('details');
 const sidebarFooter = document.getElementById('sidebarFooter');
+const tracerPrintBtn = document.getElementById('tracer-print');
 const addPartitionSidebarBtn = document.getElementById('addPartitionSidebarBtn');
 const addPartitionModal = document.getElementById('addPartitionModal');
 const addPartitionForm = document.getElementById('addPartitionForm');
@@ -148,8 +221,6 @@ const barangaySelect = document.getElementById('record-barangay');
 const classificationSelect = document.getElementById('record-classification');
 const wrap = document.getElementById('chart-wrap');
 let activeSidebarNode = null;
-// persist selected node id so selection survives re-renders/scrolling
-let selectedNodeId = null;
 
 // Transform state
 let transform = { x: 0, y: 0, scale: 1 };
@@ -238,7 +309,8 @@ function filterVisibleNodes(node, depth = 0, xPos = 0) {
   // Always include root
   if (node.id === 'root') {
     const filteredChildren = [];
-    let childXPos = -((node.children?.length || 1) * 150);
+    const childCount = node.children?.length || 1;
+    let childXPos = -((childCount - 1) * 150);
     
     if (node.children) {
       node.children.forEach(child => {
@@ -290,15 +362,17 @@ function render() {
   
   // Start with full data or search-filtered data
   let dataToRender = ORG_DATA;
+  let filteredData = null;
   
   // If there's an active search query, apply search filter first
   if (currentSearchQuery) {
     const searchFiltered = filterNodes(ORG_DATA, currentSearchQuery);
     dataToRender = searchFiltered || ORG_DATA;
+    filteredData = dataToRender;
+  } else {
+    // Then apply viewport culling when not searching
+    filteredData = filterVisibleNodes(dataToRender);
   }
-  
-  // Then apply viewport culling
-  const filteredData = filterVisibleNodes(dataToRender);
   
   if (filteredData) {
     const ul = createNodeElement(filteredData);
@@ -376,6 +450,7 @@ function drawConnectorLines() {
     
     childCards.forEach(childCard => {
       const childRect = childCard.getBoundingClientRect();
+      if (!childRect.width || !childRect.height) return;
       const childX = (childRect.left - chartRect.left) - minX + childRect.width / 2;
       const childY = (childRect.top - chartRect.top) - minY;
       
@@ -406,12 +481,28 @@ function drawConnectorLines() {
 function createNodeElement(node) {
   const li = document.createElement('div');
   li.className = 'node fade';
+  li.setAttribute('data-node-id', node.id);
 
   // Card element
   const card = document.createElement('div');
-  // expose node id on the card for selection
-  card.dataset.nodeId = node.id;
   card.className = 'card';
+
+  // Toggle button for nodes with children
+  if (node.children && node.children.length) {
+    const t = document.createElement('div');
+    t.className = 'node-toggle';
+    t.textContent = '▾';
+    t.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      li.classList.toggle('collapsed');
+      scheduleRedraw();
+    };
+    card.appendChild(t);
+    if (node.type === 'cadastral' && node.collapsed !== false) {
+      li.classList.add('collapsed');
+    }
+  }
   const title = document.createElement('div');
   title.className = 'title';
   const sub = document.createElement('div');
@@ -436,21 +527,7 @@ function createNodeElement(node) {
   card.appendChild(title);
   card.appendChild(sub);
 
-  // Delete button (for non-root nodes) - appears on left
-  if (node.id !== 'root') {
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'delete-btn';
-    deleteBtn.type = 'button';
-    deleteBtn.innerHTML = '−';
-    deleteBtn.title = 'Delete node';
-    deleteBtn.onclick = (e) => {
-      e.stopPropagation();
-      showDeleteModal(node);
-    };
-    card.appendChild(deleteBtn);
-  }
-
-  // Add button (for nodes with < 2 children) - appears on right
+  // Add button (for nodes with < 2 children)
   const childCount = node.children ? node.children.length : 0;
   if (childCount < 2) {
     const addBtn = document.createElement('button');
@@ -466,19 +543,25 @@ function createNodeElement(node) {
     card.appendChild(addBtn);
   }
 
-  // Click handler to show details and mark selection (persisted across renders)
-  card.addEventListener('click', (e) => {
+  // Delete button (for non-root nodes)
+  if (node.id !== 'root') {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-btn';
+    deleteBtn.type = 'button';
+    deleteBtn.innerHTML = '−';
+    deleteBtn.title = 'Delete node';
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      showDeleteModal(node);
+    };
+    card.appendChild(deleteBtn);
+  }
+
+  // Click handler to show details
+  card.onclick = (e) => {
     e.stopPropagation();
     showDetails(node);
-    selectedNodeId = node.id;
-    // re-render so selected class is applied to the newly created DOM
-    render();
-  });
-
-  // Apply selected class if this node is the currently selected one
-  if (selectedNodeId && selectedNodeId === node.id) {
-    card.classList.add('selected');
-  }
+  };
 
   li.appendChild(card);
 
@@ -538,17 +621,6 @@ function findNodeById(node, nodeId) {
   return null;
 }
 
-function findParentNodeById(node, nodeId, parent = null) {
-  if (!node) return null;
-  if (node.id === nodeId) return parent;
-  if (!node.children) return null;
-  for (const child of node.children) {
-    const found = findParentNodeById(child, nodeId, node);
-    if (found) return found;
-  }
-  return null;
-}
-
 /**
  * Delete a node (unless it's root)
  */
@@ -598,6 +670,15 @@ function confirmDeleteNode(event) {
  * Show node details in sidebar
  */
 function showDetails(node) {
+  // Remove highlight from previously selected card
+  document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
+  
+  // Highlight the selected card
+  const selectedCard = document.querySelector(`[data-node-id="${node.id}"]`)?.querySelector('.card');
+  if (selectedCard) {
+    selectedCard.classList.add('selected');
+  }
+  
   details.innerHTML = '';
   const h = document.createElement('div');
   h.className = 'h';
@@ -654,6 +735,93 @@ function showDetails(node) {
   sidebar.setAttribute('aria-hidden', 'false');
 }
 
+// ============================================================================
+// PROGRAMMATIC FOCUS (postMessage API)
+// ============================================================================
+
+function normalizeKeyForMatch(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '').trim();
+}
+
+function findNodeByLot(node, lot) {
+  if (!node) return null;
+  const target = normalizeKeyForMatch(lot);
+  const nodeLot = normalizeKeyForMatch(node.lotNumber || node.CADASTRAL_SURVEY_NO || node.CADASTRAL || '');
+  if (nodeLot && target && (nodeLot === target || nodeLot.indexOf(target) !== -1 || target.indexOf(nodeLot) !== -1)) return node;
+  if (!node.children) return null;
+  for (const child of node.children) {
+    const found = findNodeByLot(child, lot);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findPathToNode(root, nodeId, path) {
+  path = path || [];
+  if (!root) return null;
+  if (root.id === nodeId) return path.concat(root);
+  if (!root.children) return null;
+  for (const child of root.children) {
+    const p = findPathToNode(child, nodeId, path.concat(root));
+    if (p) return p;
+  }
+  return null;
+}
+
+function focusOnLot(lot) {
+  if (!lot) return;
+  const q = String(lot).trim();
+  // set search input but don't prematurely open details for fuzzy matches
+  searchInput.value = q;
+  currentSearchQuery = q.toLowerCase();
+  handleSearch();
+
+  // Prefer exact normalized match first
+  function findExact(node, lotNorm) {
+    if (!node) return null;
+    const nodeLot = normalizeKeyForMatch(node.lotNumber || node.CADASTRAL_SURVEY_NO || node.CADASTRAL || '');
+    if (nodeLot && nodeLot === lotNorm) return node;
+    if (!node.children) return null;
+    for (const child of node.children) {
+      const f = findExact(child, lotNorm);
+      if (f) return f;
+    }
+    return null;
+  }
+
+  const norm = normalizeKeyForMatch(lot);
+  const exactNode = findExact(ORG_DATA, norm);
+  let node = exactNode || findNodeByLot(ORG_DATA, lot);
+  if (node) {
+    const path = findPathToNode(ORG_DATA, node.id) || [];
+    path.forEach(n => { if (n) n.collapsed = false; });
+    render();
+    setTimeout(() => {
+      try {
+        const card = document.querySelector(`[data-node-id="${node.id}"] .card`);
+        if (card) {
+          const duration = exactNode ? 3000 : 1600;
+          card.classList.add('focused-by-parent');
+          setTimeout(() => card.classList.remove('focused-by-parent'), duration);
+        }
+      } catch (e) { /* ignore */ }
+    }, 160);
+  }
+}
+
+// Listen for messages from parent window (parcel page)
+window.addEventListener('message', function (ev) {
+  try {
+    var msg = ev.data || {};
+    if (!msg || !msg.type) return;
+    if (msg.type === 'parcel-root' || msg.type === 'parcel-data') {
+      var lot = msg.lot || msg.cadastralLot || '';
+      if (!lot) return;
+      focusOnLot(lot);
+    }
+  } catch (e) { /* ignore malicious/invalid messages */ }
+});
+
 /**
  * Close sidebar
  */
@@ -662,6 +830,59 @@ function closeSidebar() {
   sidebar.setAttribute('aria-hidden', 'true');
   sidebarFooter?.classList.add('hidden');
   activeSidebarNode = null;
+  document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
+}
+
+function normalizePrintValue(value) {
+  return value == null ? '' : String(value).trim();
+}
+
+function getNodeDisplayName(node) {
+  if (!node) return '';
+  if (node.type === 'parcel') {
+    return normalizePrintValue(node.DISPLAY_NAME) || normalizePrintValue(node.DECLARANT) || [normalizePrintValue(node.lastName), normalizePrintValue(node.firstName)].filter(Boolean).join(', ');
+  }
+  if (node.type === 'cadastral') {
+    return [normalizePrintValue(node.lastName), normalizePrintValue(node.firstName)].filter(Boolean).join(', ') || normalizePrintValue(node.name);
+  }
+  return '';
+}
+
+function getNodeLocationValue(node) {
+  if (!node) return '';
+  return normalizePrintValue(node.LOCATION) || normalizePrintValue(node.OWNER_ADDRESS) || normalizePrintValue(node.barangay) || normalizePrintValue(node.section);
+}
+
+function getTracerPrintRows(node) {
+  if (!node) return [];
+  const path = findPathToNode(ORG_DATA, node.id) || [];
+  const rows = path.slice(1).reverse().map(n => ({
+    tdNo: normalizePrintValue(n.TD_NO || n.EFF || n.DECLARATION_NO),
+    declarant: normalizePrintValue(n.DECLARANT) || getNodeDisplayName(n),
+    location: getNodeLocationValue(n),
+    lotNo: normalizePrintValue(n.lotNumber || n.CADASTRAL_SURVEY_NO || n.PARCEL_NO),
+    area: normalizePrintValue(n.area || n.TOTAL_AREA),
+    pin: normalizePrintValue(n.PIN || n.NEW_PIN || n.SERVER_PIN),
+    conveyance: normalizePrintValue(n.CONVEYANCE),
+    eff: normalizePrintValue(n.EFF)
+  }));
+  return rows;
+}
+
+function getSelectedSidebarNode() {
+  if (activeSidebarNode) return activeSidebarNode;
+  const selectedCard = document.querySelector('.card.selected');
+  if (!selectedCard) return null;
+  const nodeId = selectedCard.closest('[data-node-id]')?.getAttribute('data-node-id');
+  if (!nodeId) return null;
+  return findNodeById(ORG_DATA, nodeId);
+}
+
+function openTracerPrint() {
+  const node = getSelectedSidebarNode();
+  const rows = getTracerPrintRows(node);
+  localStorage.setItem('tracerPrintData', JSON.stringify({ rows }));
+  window.open('./tracerprint.html', '_blank');
 }
 
 // ============================================================================
@@ -673,12 +894,23 @@ function closeSidebar() {
  */
 function filterNodes(node, query) {
   let match = false;
-  const text = [node.lastName, node.firstName, node.DISPLAY_NAME, node.CLASSIFICATION, node.lotNumber, node.name]
+  const lotNumber = node.lotNumber ? String(node.lotNumber).trim() : '';
+  const normalizedLotNumber = lotNumber.replace(/^0+/, '') || lotNumber;
+  const normalizedQuery = query.replace(/^0+/, '') || query;
+  const isNumericQuery = /^\d+$/.test(query);
+  const text = [node.lastName, node.firstName, node.DISPLAY_NAME, node.CLASSIFICATION, lotNumber, node.name]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
   
-  if (text.includes(query)) match = true;
+  if (isNumericQuery) {
+    if (normalizedLotNumber && normalizedLotNumber === normalizedQuery) match = true;
+  } else {
+    if (text.includes(query) || text.includes(normalizedQuery)) match = true;
+    if (!match && /^\d+$/.test(query) && normalizedLotNumber && normalizedLotNumber === normalizedQuery) {
+      match = true;
+    }
+  }
   
   let children = [];
   if (node.children) {
@@ -687,9 +919,13 @@ function filterNodes(node, query) {
       .filter(Boolean);
   }
   
-  if (children.length || match) {
-    const copy = Object.assign({}, node, { children });
-    return copy;
+  if (match) {
+    // If this node matches, keep its full child subtree so newly added children remain visible.
+    return Object.assign({}, node, { children: node.children ? node.children.slice() : [] });
+  }
+  
+  if (children.length) {
+    return Object.assign({}, node, { children });
   }
   
   return null;
@@ -720,9 +956,8 @@ function handleSearch() {
  * Only applies scale - pan is handled via viewport culling (Facebook-style)
  */
 function applyTransform() {
-  // Only apply zoom scale, not pan transform
-  // Pan changes what's visible via viewport culling, not visual movement
-  chart.style.transform = `scale(${transform.scale})`;
+  // Apply both pan and zoom transforms so the chart moves visually.
+  chart.style.transform = `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`;
 }
 
 /**
@@ -746,35 +981,19 @@ function fitView() {
 }
 
 /**
- * Zoom in
+ * Scroll chart up
  */
-function zoomIn() {
-  transform.scale = Math.min(2.5, transform.scale + 0.1);
-  applyTransform();
-}
-
-/**
- * Zoom out
- */
-function zoomOut() {
-  transform.scale = Math.max(0.3, transform.scale - 0.1);
-  applyTransform();
-}
-
-/**
- * Scroll vertically
- */
-function scrollVertical(amount) {
-  transform.y -= amount;
+function scrollUp() {
+  transform.y += 100;
   applyTransform();
   render();
 }
 
 /**
- * Scroll horizontally
+ * Scroll chart down
  */
-function scrollHorizontal(amount) {
-  transform.x -= amount;
+function scrollDown() {
+  transform.y -= 100;
   applyTransform();
   render();
 }
@@ -784,23 +1003,21 @@ function scrollHorizontal(amount) {
 // ============================================================================
 
 wrap.addEventListener('wheel', (e) => {
-  // Scroll behavior: scroll = up/down, Shift + scroll = left/right
   e.preventDefault();
   
-  if (e.ctrlKey || e.metaKey) {
-    // Zoom on Ctrl/Cmd + scroll
-    const zoomDirection = e.deltaY > 0 ? -1 : 1;
-    transform.scale = Math.max(0.3, transform.scale + (zoomDirection * 0.1));
+  // Shift+Scroll for vertical navigation (Y axis)
+  if (e.shiftKey) {
+    const panAmount = e.deltaY * 0.5;
+    transform.y -= panAmount;
     applyTransform();
-    render();
-  } else if (e.shiftKey) {
-    // Horizontal pan on Shift + scroll
-    const panAmount = e.deltaY > 0 ? 50 : -50;
-    scrollHorizontal(panAmount);
+    scheduleRedraw();
   } else {
-    // Vertical scroll on regular scroll
-    const scrollAmount = e.deltaY > 0 ? 50 : -50;
-    scrollVertical(scrollAmount);
+    // Use scroll for horizontal panning instead of zoom
+    // Positive deltaY (scroll down) pans right, negative (scroll up) pans left
+    const panAmount = e.deltaY * 0.5; // Adjust multiplier for pan sensitivity
+    transform.x -= panAmount;
+    applyTransform();
+    scheduleRedraw();
   }
 });
 
@@ -840,12 +1057,15 @@ wrap.addEventListener('mousemove', (e) => {
 // ============================================================================
 
 document.getElementById('closeSidebar').addEventListener('click', closeSidebar);
-document.getElementById('zoomIn').addEventListener('click', () => {
-  zoomIn();
+if (tracerPrintBtn) {
+  tracerPrintBtn.addEventListener('click', openTracerPrint);
+}
+document.getElementById('scrollUp').addEventListener('click', () => {
+  scrollUp();
   render();
 });
-document.getElementById('zoomOut').addEventListener('click', () => {
-  zoomOut();
+document.getElementById('scrollDown').addEventListener('click', () => {
+  scrollDown();
   render();
 });
 document.getElementById('resetView').addEventListener('click', resetView);
@@ -858,24 +1078,6 @@ if (addPartitionSidebarBtn) {
     showAddPartitionModal();
   });
 }
-
-// Deselect selected card when clicking outside any card
-document.addEventListener('click', (e) => {
-  // if the click was inside a card, ignore (card click handler will handle selection)
-  if (e.target && e.target.closest && e.target.closest('.card')) return;
-  if (selectedNodeId) {
-    selectedNodeId = null;
-    document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
-  }
-});
-
-// Allow Escape key to deselect
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && selectedNodeId) {
-    selectedNodeId = null;
-    document.querySelectorAll('.card.selected').forEach(c => c.classList.remove('selected'));
-  }
-});
 
 function setArpDefaults() {
   if (!addPartitionForm) return;
@@ -892,26 +1094,6 @@ function setArpDefaults() {
 
 function showAddPartitionModal() {
   setArpDefaults();
-  if (addPartitionForm && activeSidebarNode) {
-    const cadastralInput = addPartitionForm.querySelector('[name="cadastralLotNo"]');
-    const parentNode = findParentNodeById(ORG_DATA, activeSidebarNode.id);
-    let cadastralValue = '';
-
-    if (parentNode) {
-      if (parentNode.type === 'cadastral') {
-        cadastralValue = parentNode.lotNumber || '';
-      } else if (parentNode.children && parentNode.children.length > 0) {
-        const firstChild = parentNode.children[0];
-        cadastralValue = firstChild.CADASTRAL_SURVEY_NO || firstChild.lotNumber || '';
-      }
-    }
-
-    if (cadastralInput) {
-      cadastralInput.value = cadastralValue;
-      cadastralInput.readOnly = true;
-      cadastralInput.placeholder = cadastralValue ? '' : 'Auto-generated from parent';
-    }
-  }
   addPartitionModal?.classList.remove('hidden');
 }
 
@@ -927,7 +1109,10 @@ if (cancelAddPartitionBtn) {
 }
 if (barangaySelect) {
   barangaySelect.addEventListener('change', () => {
-    const code = getBarangayCode(barangaySelect.value || '');
+    const val = barangaySelect.value || '';
+    const code = getBarangayCode(val);
+    // debug: log selected barangay and resolved code to console
+    try { console.debug('barangay select ->', val, '-> code', code); } catch (e) { /* ignore */ }
     const arpC = addPartitionForm?.querySelector('[name="arpC"]');
     if (arpC) arpC.value = code;
   });
@@ -947,20 +1132,19 @@ if (addPartitionForm) {
     const serverPin = arpValues.join('-');
 
     const effValue = formData.get('eff')?.toString().trim() || '';
-    const tdNoValue = formData.get('tdNo')?.toString().trim() || '';
     const newNode = {
       id: 'par_' + Date.now(),
       type: 'parcel',
-      FID: formData.get('fid')?.toString().trim() || '',
-      PIN: formData.get('pin')?.toString().trim() || '',
+      FID: null,
+      PIN: formData.get('assessorsLotNo')?.toString().trim() || '',
       SERVER_PIN: serverPin,
       NEW_PIN: formData.get('newPin')?.toString().trim() || '',
       BARANGAY: formData.get('barangay')?.toString().trim() || '',
-      SECTION_NO: formData.get('sectionNo')?.toString().trim() || '',
+      SECTION_NO: formData.get('section')?.toString().trim() || '',
       CADASTRAL_SURVEY_NO: formData.get('cadastralLotNo')?.toString().trim() || '',
       TITLE_NO: formData.get('titleNo')?.toString().trim() || '',
       EFF: effValue,
-      DECLARATION_NO: tdNoValue,
+      DECLARATION_NO: effValue,
       CONVEYANCE: formData.get('conveyance')?.toString().trim() || '',
       DECLARANT: formData.get('declarant')?.toString().trim() || '',
       PARCEL_NO: formData.get('arpE')?.toString().trim() || '',
@@ -971,6 +1155,7 @@ if (addPartitionForm) {
       TOTAL_MARKET_VALUE: '',
       TOTAL_ASSESSED_VALUE: '',
       CLASSIFICATION: formData.get('classificationCode')?.toString().trim() || '',
+      SECTION_NO: formData.get('sectionNo')?.toString().trim() || '',
       name: formData.get('nameOfOwner')?.toString().trim() || 'New parcel',
       children: []
     };
@@ -1024,6 +1209,21 @@ tryLoadSystemConfig();
 // Initial render
 render();
 applyTransform();
+
+// If the page was opened with a `lot` or `pin` query param, focus that node
+(function() {
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    var lot = params.get('lot') || params.get('search') || params.get('lotNumber');
+    var pin = params.get('pin');
+    if (lot) {
+      // delay slightly so initial layout settles
+      setTimeout(function() { focusOnLot(lot); }, 180);
+    } else if (pin) {
+      setTimeout(function() { focusOnLot(pin); }, 180);
+    }
+  } catch (e) { /* ignore */ }
+})();
 
 /**
  * USAGE NOTES:

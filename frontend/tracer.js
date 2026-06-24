@@ -187,8 +187,35 @@ function buildFromLayer() {
   return root;
 }
 
+const STORAGE_KEY = 'tracerOrgData';
+
+function isValidOrgData(data) {
+  return data && typeof data === 'object' && data.id === 'root' && Array.isArray(data.children);
+}
+
+function loadSavedOrgData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (isValidOrgData(saved)) return saved;
+  } catch (e) {
+    console.warn('Unable to load saved tracer data', e);
+  }
+  return null;
+}
+
+function saveOrgData() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(ORG_DATA));
+  } catch (e) {
+    console.warn('Unable to save tracer data', e);
+  }
+}
+
 // Initialize data
-const built = buildFromLayer();
+const savedData = loadSavedOrgData();
+const built = savedData || buildFromLayer();
 const ORG_DATA = built || {
   id: 'root', name: 'TOLEDO', type: 'root', children: [
     {
@@ -594,6 +621,7 @@ function insertBlankChildren(parentNode) {
     { id: baseId + '_2', type: 'blank', name: '', children: [] }
   );
   parentNode.collapsed = false;
+  saveOrgData();
   render();
 }
 
@@ -627,6 +655,7 @@ function findNodeById(node, nodeId) {
 function deleteNode(node) {
   if (node.id === 'root') return;
   deleteNodeById(ORG_DATA, node.id);
+  saveOrgData();
   render();
 }
 
@@ -1162,6 +1191,7 @@ if (addPartitionForm) {
 
     if (activeSidebarNode) {
       replaceNodeById(ORG_DATA, activeSidebarNode.id, newNode);
+      saveOrgData();
       hideAddPartitionModal();
       addPartitionForm.reset();
       showDetails(newNode);
